@@ -10,6 +10,9 @@ on:
     branches: [main]
     paths: ['www/**', 'ios/**', 'package.json', 'package-lock.json', 'capacitor.config.json', '.github/workflows/**']
 
+permissions:
+  contents: write          # needed to publish the release
+
 jobs:
   build:
     runs-on: xcode-27          # Apple Silicon runner with Xcode 27. If this label isn't available to you, use macos-latest.
@@ -61,3 +64,16 @@ jobs:
           name: CAS-OBD-Scanner-iPhone
           path: ${{ runner.temp }}/ipa/CAS-OBD-Scanner-iPhone.ipa
           retention-days: 30
+
+      # Also publish it as a release, so the newest build is always at
+      # https://github.com/<you>/<repo>/releases/latest/download/CAS-OBD-Scanner-iPhone.ipa
+      - name: Publish as a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" "$RUNNER_TEMP/ipa/CAS-OBD-Scanner-iPhone.ipa" \
+            --repo "${{ github.repository }}" \
+            --title "CAS OBD Scanner for iPhone (build ${{ github.run_number }})" \
+            --notes "Unsigned iPhone app. Install it with Sideloadly on Windows (see READ ME - iPhone.txt). Built from ${{ github.sha }}." \
+            --latest
