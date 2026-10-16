@@ -1,0 +1,17 @@
+{
+  "name": "cas-obd-scanner-ios",
+  "version": "3.2.0",
+  "private": true,
+  "description": "CAS OBD Scanner for iPhone (Capacitor wrapper around the scanner web app)",
+  "scripts": {
+    "sync": "cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor-community/bluetooth-le": "8.3.0",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}

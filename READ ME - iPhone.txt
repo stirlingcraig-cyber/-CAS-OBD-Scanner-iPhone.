@@ -1,0 +1,79 @@
+CAS OBD Scanner on iPhone (tested layout: iPhone 13 Pro)
+=======================================================
+
+FIRST: THE RIGHT ADAPTER
+  iPhones only connect to Bluetooth LE OBD2 adapters. Apple doesn't let apps use
+  "Bluetooth Classic" adapters (like the Panlong "for Android" one), so that
+  adapter will never work with an iPhone, in any app.
+  Buy one that says "Bluetooth 4.0", "BLE" or "works with iPhone / iOS", e.g.:
+    - Vgate iCar Pro 2S (Bluetooth 4.0 / BLE version, about £25-35). Make sure
+      the listing says BLE or 4.0: the same name is also sold as a Bluetooth 3.0
+      (Classic) version.
+    - Veepeak OBDCheck BLE+ (about £25-35).
+    - OBDLink CX (BLE, about £80): best quality and fastest; works with VW group.
+  When it arrives: plug it in, ignition on, and DON'T pair it in iPhone Settings.
+  You connect from inside the scanner.
+
+TWO WAYS TO RUN THE SCANNER ON IPHONE
+  A. Quick (today, no build): the Bluefy browser
+     1. Install "Bluefy – Web BLE Browser" (free) from the App Store.
+     2. Put the "Android (web app)" folder online once (see its READ ME:
+        drag it onto app.netlify.com/drop). You may already have done this.
+        The same address works on iPhone.
+     3. Open that https:// address in Bluefy (not Safari).
+     4. Tap Bluetooth LE, choose the adapter, allow Bluetooth.
+     Safari and Chrome on iPhone can't use Bluetooth: that's why the web
+     version didn't work. Bluefy adds the missing Bluetooth support.
+
+  B. The proper iPhone app ("CAS OBD" with its own icon)
+     This folder is a ready-made iPhone app project. GitHub builds it on a
+     Mac in the cloud for you (you don't need a Mac), and Sideloadly installs
+     it from your Windows PC.
+
+     Step 1: build it on GitHub (free)
+       1. Sign in at github.com and create a new repository, e.g. cas-obd-iphone.
+          Public is free and unlimited for builds; private works too but Mac
+          build minutes count 10x against your free monthly allowance.
+       2. On the repository page: Add file > Upload files, and drag in
+          EVERYTHING inside this folder (including the ".github" folder), then
+          Commit changes.
+       3. Open the Actions tab > "Build iPhone app" > Run workflow.
+          It takes about 5-10 minutes.
+       4. Open the finished run and download "CAS-OBD-Scanner-iPhone" under
+          Artifacts. Unzip it: you get CAS-OBD-Scanner-iPhone.ipa.
+
+     Step 2: install on the iPhone with Sideloadly (Windows, free)
+       1. Install iTunes and iCloud for Windows from apple.com (the website
+          versions, not the Microsoft Store ones), then Sideloadly from
+          sideloadly.io.
+       2. Connect the iPhone by cable, unlock it and tap Trust.
+       3. In Sideloadly, drag in the .ipa, enter your Apple ID and press Start.
+          (It signs the app with your Apple ID. A free Apple ID is fine.)
+       4. On the iPhone: Settings > Privacy & Security > Developer Mode > On,
+          and restart when asked.
+       5. Settings > General > VPN & Device Management > your Apple ID > Trust.
+       6. Open CAS OBD. Allow Bluetooth when asked.
+
+     Free Apple ID: the app must be refreshed every 7 days (Sideloadly can do
+     this automatically over Wi-Fi while the PC is on, or just press Start
+     again). Your data inside the app is kept when you refresh.
+     Paid Apple Developer Program (£79/year): the app lasts a year and you can
+     install it through TestFlight without a cable. Ask Claude to add the
+     signing step to the workflow if you join.
+
+UPDATING THE APP LATER
+  Replace www\index.html with the new cas-obd-scanner.html (renamed to
+  index.html), upload it to the repository, run the workflow again and
+  install the new .ipa with Sideloadly.
+
+WHAT WORKS ON IPHONE
+  Everything except USB cable and Wi-Fi adapters (computer only), including
+  Live analysis, Test centre, all systems scan, Service, Tyres and the
+  particulate filter tools. Learned data, service records and tyre checks are
+  stored on the phone.
+
+FILES
+  www\index.html                         the scanner (same as the PC version)
+  capacitor.config.json, package*.json   app settings and components
+  ios\                                   the Xcode project (Bluetooth permission and icon set)
+  .github\workflows\build-iphone-app.yml the cloud build

@@ -1,0 +1,63 @@
+# Builds the CAS OBD Scanner iPhone app on a GitHub-hosted Mac (Xcode 27 image).
+# Run it from the Actions tab (Build iPhone app > Run workflow) or by pushing to main.
+# The result is an unsigned .ipa under the run's "Artifacts"; install it on your
+# iPhone with Sideloadly (Windows), which signs it with your Apple ID.
+name: Build iPhone app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['www/**', 'ios/**', 'package.json', 'package-lock.json', 'capacitor.config.json', '.github/workflows/**']
+
+jobs:
+  build:
+    runs-on: xcode-27          # Apple Silicon runner with Xcode 27. If this label isn't available to you, use macos-latest.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Capacitor and the Bluetooth plugin
+        run: npm ci
+
+      - name: Copy the scanner into the iOS project
+        run: npx cap sync ios
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build the app (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            archive | tail -n 80
+
+      - name: Package as .ipa
+        run: |
+          set -e
+          APP="$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app"
+          test -d "$APP" || { echo "App.app was not produced"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "CAS-OBD-Scanner-iPhone.ipa" Payload
+          ls -la "CAS-OBD-Scanner-iPhone.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CAS-OBD-Scanner-iPhone
+          path: ${{ runner.temp }}/ipa/CAS-OBD-Scanner-iPhone.ipa
+          retention-days: 30

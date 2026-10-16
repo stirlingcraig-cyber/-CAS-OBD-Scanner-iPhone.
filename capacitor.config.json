@@ -1,0 +1,20 @@
+{
+  "appId": "uk.co.cassolutions.obdscanner",
+  "appName": "CAS OBD",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "always",
+    "backgroundColor": "#171c23",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "plugins": {
+    "BluetoothLe": {
+      "displayStrings": {
+        "scanning": "Looking for OBD adapters…",
+        "cancel": "Cancel",
+        "availableDevices": "Choose your OBD adapter",
+        "noDeviceFound": "No adapter found. Is it plugged in with the ignition on?"
+      }
+    }
+  }
+}
