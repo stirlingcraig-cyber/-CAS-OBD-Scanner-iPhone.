@@ -384,7 +384,7 @@ html.android .rec{display:none}
     </div>
     <div class="conn-grid">
       <button class="conn" id="cBtc"><svg viewBox="0 0 24 24"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg><b>Bluetooth Classic</b><span>Adapters sold for Android. Pair in Windows first.</span></button>
-      <button class="conn" id="cBle"><svg viewBox="0 0 24 24"><path d="M5 7l10 10-5 5V2l5 5L5 17"/><path d="M18.5 9.5a3.5 3.5 0 0 1 0 5M21 7.5a7 7 0 0 1 0 9"/></svg><b>Bluetooth LE</b><span>BLE or iPhone adapters. No pairing needed.</span></button>
+      <button class="conn" id="cBle"><svg viewBox="0 0 24 24"><path d="M5 7l10 10-5 5V2l5 5L5 17"/><path d="M18.5 9.5a3.5 3.5 0 0 1 0 5M21 7.5a7 7 0 0 1 0 9"/></svg><b>Bluetooth LE</b><span>BLE, Bluetooth 4.0/5.0 and iPhone adapters. No pairing needed.</span></button>
       <button class="conn" id="cSerial"><svg viewBox="0 0 24 24"><path d="M9 2h6v6H9z"/><path d="M6 8h12v5a6 6 0 0 1-12 0z"/><path d="M12 19v3"/></svg><b>USB or COM port</b><span>Cable adapters and Bluetooth COM ports.</span></button>
       <button class="conn" id="cWifi"><svg viewBox="0 0 24 24"><path d="M2 9a15 15 0 0 1 20 0"/><path d="M5.5 12.5a10 10 0 0 1 13 0"/><path d="M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r=".8"/></svg><b>Wi-Fi adapter</b><span>Run obd-wifi-bridge.py first.</span></button>
       <button class="conn demo" id="cDemo"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></svg><b>Demo car</b><span>A simulated car with faults, to try every screen.</span></button>
@@ -994,23 +994,34 @@ class SerialTransport {
   }
 }
 function portKey(p) { const i = p.getInfo ? p.getInfo() : {}; return i.bluetoothServiceClassId ? 'bt:' + i.bluetoothServiceClassId : i.usbVendorId ? 'usb:' + i.usbVendorId + ':' + i.usbProductId : 'port'; }
+/* Bluetooth LE serial services used by OBD2 adapters (Bluetooth 4.x and 5.x alike):
+   FFF0 (Vgate, Veepeak and most ELM327 BLE clones), FFE0 (HM-10 style modules), 18F0 (newer clones and vLinker),
+   E7810A71 (OBDLink CX), 49535343 (Microchip/ISSC transparent UART, many dual-mode BT 5.0 adapters),
+   6E400001 (Nordic UART, some BT 5.0 adapters) */
+const BLE_OBD_SERVICES = [0xfff0, 0xffe0, 0x18f0, 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '6e400001-b5a3-f393-e0a9-e50e24dcca9e'];
 class BleTransport {
   async open() {
-    const services = [0xfff0, 0xffe0, 0x18f0, 'e7810a71-73ae-499d-8c15-faa9aef0c3f2'];
+    const services = BLE_OBD_SERVICES;
     this.device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: services });
     store.set('lastConn', 'ble'); store.set('lastBle', this.device.name || '');
     this.device.addEventListener('gattserverdisconnected', () => this.onLost && this.onLost());
-    const server = await this.device.gatt.connect();
-    let n = null, w = null;
-    for (const uuid of services) {
-      let svc; try { svc = await server.getPrimaryService(uuid); } catch { continue; }
-      for (const c of await svc.getCharacteristics()) {
-        if (!n && (c.properties.notify || c.properties.indicate)) n = c;
-        if (!w && (c.properties.write || c.properties.writeWithoutResponse)) w = c;
-      }
-      if (n && w) break; n = w = null;
+    let server;
+    try { server = await this.device.gatt.connect(); }
+    catch { await sleep(800); server = await this.device.gatt.connect(); }   // some Bluetooth 5.0 adapters refuse the first attempt
+    let n = null, w = null, found = [];
+    let list = []; try { list = await server.getPrimaryServices(); } catch {}
+    // known OBD services first, in the order above, then anything else the adapter exposes
+    const key = u => typeof u === 'number' ? '0000' + u.toString(16).padStart(4, '0') + '-0000-1000-8000-00805f9b34fb' : u;
+    const order = BLE_OBD_SERVICES.map(key);
+    list.sort((a, b) => ((order.indexOf(a.uuid) + 1) || 99) - ((order.indexOf(b.uuid) + 1) || 99));
+    if (!list.length) for (const uuid of services) { try { list.push(await server.getPrimaryService(uuid)); } catch {} }
+    for (const svc of list) {
+      found.push(svc.uuid);
+      let chars = []; try { chars = await svc.getCharacteristics(); } catch { continue; }
+      const nn = chars.find(c => c.properties.notify || c.properties.indicate), ww = chars.find(c => c.properties.write || c.properties.writeWithoutResponse);
+      if (nn && ww) { n = nn; w = ww; break; }
     }
-    if (!n || !w) throw new Error('No OBD serial service found on that Bluetooth device');
+    if (!n || !w) { try { this.device.gatt.disconnect(); } catch {} throw new Error(`That Bluetooth device has no OBD serial service${found.length ? ` (it offers ${found.map(u => u.slice(4, 8).toUpperCase()).join(', ')})` : ''}. Choose the OBD adapter itself, and if it still fails, send this message to support.`); }
     this.w = w;
     const dec = new TextDecoder();
     n.addEventListener('characteristicvaluechanged', e => this.onData(dec.decode(e.target.value)));
@@ -4048,7 +4059,7 @@ const NBLE = !IS_NATIVE ? null : (CAP.Plugins && CAP.Plugins.BluetoothLe) || (CA
 const uuid16 = n => `0000${n.toString(16).padStart(4, '0')}-0000-1000-8000-00805f9b34fb`;
 /* OBD adapter serial services: FFF0 (Vgate, Veepeak and most ELM327 BLE clones), FFE0 (HM-10 based),
    18F0 (some newer clones), and the Microchip transparent-UART service used by OBDLink CX / MX+ */
-const OBD_BLE = [uuid16(0xfff0), uuid16(0xffe0), uuid16(0x18f0), 'e7810a71-73ae-499d-8c15-faa9aef0c3f2'];
+const OBD_BLE = BLE_OBD_SERVICES.map(u => typeof u === 'number' ? uuid16(u) : u);
 const hexOf = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join(' ');
 const bytesOfHex = h => { const s = String(h || '').replace(/[^0-9a-f]/gi, ''), o = new Uint8Array(s.length >> 1); for (let i = 0; i < o.length; i++) o[i] = parseInt(s.substr(i * 2, 2), 16); return o; };
 
@@ -4062,7 +4073,8 @@ if (NBLE) {
     this.id = dev.deviceId; this.name = dev.name || 'adapter';
     store.set('lastConn', 'ble'); store.set('lastBle', this.name);
     this.subs = [await NBLE.addListener(`disconnected|${this.id}`, () => { this.closed || (this.onLost && this.onLost()); })];
-    await NBLE.connect({ deviceId: this.id, timeout: 12000 });
+    try { await NBLE.connect({ deviceId: this.id, timeout: 12000 }); }
+    catch { await sleep(800); await NBLE.connect({ deviceId: this.id, timeout: 12000 }); }   // some Bluetooth 5.0 adapters refuse the first attempt
     const { services = [] } = await NBLE.getServices({ deviceId: this.id });
     const known = s => OBD_BLE.includes(String(s.uuid).toLowerCase());
     const generic = s => /^0000180[01a]-/i.test(s.uuid);
@@ -4072,7 +4084,7 @@ if (NBLE) {
       const n = ch.find(c => p(c).notify || p(c).indicate), w = ch.find(c => p(c).writeWithoutResponse) || ch.find(c => p(c).write);
       if (n && w) { this.svc = svc.uuid; this.n = n.uuid; this.w = w.uuid; this.wnr = !!p(w).writeWithoutResponse && !p(w).write; break; }
     }
-    if (!this.svc) { await NBLE.disconnect({ deviceId: this.id }).catch(() => {}); throw new Error('That Bluetooth device has no OBD serial service. Choose the OBD adapter (often named OBDII, IOS-Vlink, OBDLink CX or Veepeak).'); }
+    if (!this.svc) { await NBLE.disconnect({ deviceId: this.id }).catch(() => {}); throw new Error(`That Bluetooth device has no OBD serial service${services.length ? ` (it offers ${services.map(x => String(x.uuid).slice(4, 8).toUpperCase()).join(', ')})` : ''}. Choose the OBD adapter itself (often named OBDII, IOS-Vlink, vLinker, OBDLink CX or Veepeak).`); }
     const dec = new TextDecoder();
     this.subs.push(await NBLE.addListener(`notification|${this.id}|${this.svc}|${this.n}`, ev => this.onData(dec.decode(bytesOfHex(ev && ev.value)))));
     await NBLE.startNotifications({ deviceId: this.id, service: this.svc, characteristic: this.n });
@@ -4099,16 +4111,16 @@ if (IS_IOS || IS_NATIVE) {
   setBtn('cSerial', false, 'Computer only.');
   setBtn('cWifi', false, 'Computer only: needs the Wi-Fi bridge program.');
   const bleOK = !!NBLE || 'bluetooth' in navigator;
-  setBtn('cBle', bleOK, bleOK ? 'Bluetooth 4.0 / BLE adapters. Don\'t pair it in iPhone Settings: just tap here.' : 'Needs the CAS OBD iPhone app or the Bluefy browser (see below).');
+  setBtn('cBle', bleOK, bleOK ? 'Bluetooth LE adapters (Bluetooth 4.0 or 5.0). Don\'t pair it in iPhone Settings: just tap here.' : 'Needs the CAS OBD iPhone app or the Bluefy browser (see below).');
   $('#quickRow').style.display = 'none';
   { const g = document.querySelector('.conn-grid'); if (g) { g.prepend($('#cDemo')); g.prepend($('#cBle')); } }   // the options that work on iPhone first
   const sup = $('#support');
   if (!bleOK) {
     sup.style.display = '';
-    sup.innerHTML = '<b>On iPhone, Safari and Chrome can\'t talk to Bluetooth adapters.</b> Use the <b>CAS OBD Scanner iPhone app</b>, or open this page in the free <b>Bluefy – Web BLE Browser</b> from the App Store. You also need a <b>Bluetooth LE</b> adapter ("Bluetooth 4.0", "BLE" or "works with iPhone"): Bluetooth Classic adapters sold "for Android" can\'t connect to an iPhone. Demo mode works here.';
+    sup.innerHTML = '<b>On iPhone, Safari and Chrome can\'t talk to Bluetooth adapters.</b> Use the <b>CAS OBD Scanner iPhone app</b>, or open this page in the free <b>Bluefy – Web BLE Browser</b> from the App Store. You also need a <b>Bluetooth LE</b> adapter ("Bluetooth 4.0", "Bluetooth 5.0", "BLE" or "works with iPhone"): Bluetooth Classic adapters sold "for Android" can\'t connect to an iPhone. Demo mode works here.';
   } else { sup.style.display = 'none'; sup.textContent = ''; }
   const help = document.querySelector('#btHelp ol');
-  if (help) help.insertAdjacentHTML('afterbegin', `<li><b>On iPhone:</b> only <b>Bluetooth LE</b> adapters work (box says Bluetooth 4.0, BLE or iOS). Plug it in, switch the ignition on, then tap <b>Bluetooth LE</b> and choose the adapter. <b>Don't</b> pair it in iPhone Settings. If nothing appears, check Settings &gt; Privacy &amp; Security &gt; Bluetooth allows ${IS_NATIVE ? 'CAS OBD' : 'Bluefy'}, and close any other OBD app.</li>`);
+  if (help) help.insertAdjacentHTML('afterbegin', `<li><b>On iPhone:</b> only <b>Bluetooth LE</b> adapters work (box says Bluetooth 4.0, Bluetooth 5.0, BLE or iOS). Plug it in, switch the ignition on, then tap <b>Bluetooth LE</b> and choose the adapter. <b>Don't</b> pair it in iPhone Settings. If nothing appears, check Settings &gt; Privacy &amp; Security &gt; Bluetooth allows ${IS_NATIVE ? 'CAS OBD' : 'Bluefy'}, and close any other OBD app.</li>`);
   document.querySelectorAll('#v-home p').forEach(p => { if (/connects to this computer/.test(p.textContent)) p.textContent = p.textContent.replace('this computer', 'this iPhone'); });
   // a Wi-Fi bridge and the launcher don't exist on the phone
   ['wifiHost', 'wifiPort'].forEach(id => { const f = $('#' + id); if (f && f.closest('.field')) f.closest('.field').style.display = 'none'; });
