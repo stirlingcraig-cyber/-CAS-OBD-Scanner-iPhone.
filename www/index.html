@@ -581,6 +581,12 @@ html.android .rec{display:none}
 <!-- CAN MONITOR -->
 <section id="v-can">
   <div class="card">
+    <h2>Engine position sensors and CAN link</h2>
+    <p class="small muted" style="margin-top:-4px">Checks that the engine ECU is talking over CAN and reads the crankshaft (RPM) and camshaft signals it can report. Run it with the engine running at idle, once warm, and again with the engine off to see the difference. The camshaft sensor has no standard live reading, so this check uses the position fault codes (P0335–P0344, P0016–P0019) and the timing signal instead.</p>
+    <div class="row"><button class="btn" id="sensorGo">Run position sensor check</button></div>
+    <div id="sensorOut" style="margin-top:12px"></div>
+  </div>
+  <div class="card">
     <h2>Manufacturer broadcast frames</h2>
     <p class="small muted" style="margin-top:-4px">Listens to all traffic on the diagnostic CAN bus for a few seconds. It shows each message ID, how often it's sent, and which bytes change (highlighted), which is how OEM signals are reverse-engineered. Many newer cars have a gateway that keeps the OBD port quiet, so an empty list is normal on those.</p>
     <div class="row"><label class="small">Listen for <select id="canSecs"><option>3</option><option selected>5</option><option>10</option></select> seconds</label><button class="btn" id="canGo">Start listening</button><button class="btn ghost" id="canCsv">Download CSV</button></div>
@@ -2365,6 +2371,57 @@ async function toggleXPoll() {
   });
 }
 
+/* ================= POSITION SENSOR AND CAN LINK CHECK ================= */
+const POS_DTC = /^(P03(3[5-9]|4[0-4])|P001[6-9])$/;
+async function doSensorCheck() {
+  if (!connected) return toast('Connect first');
+  if (elm.lock) return toast(`Please wait: ${elm.lockName} is still running`);
+  const out = $('#sensorOut'), rows = [];
+  const put = (cls, label, text) => rows.push(`<div class="small" style="margin:6px 0"><b style="color:${cls === 'ok' ? 'var(--ok, #2e9e5b)' : cls === 'bad' ? 'var(--bad, #d64545)' : cls === 'warn' ? 'var(--warn, #d9962b)' : 'inherit'}">${cls === 'ok' ? 'OK' : cls === 'bad' ? 'Fault' : cls === 'warn' ? 'Check' : 'Info'}: ${esc(label)}</b> ${esc(text)}</div>`);
+  out.innerHTML = '<p class="small muted">Checking the link and sampling the engine speed for about 6 seconds…</p>';
+  $('#sensorGo').disabled = true;
+  try {
+    // 1. CAN link
+    put('info', 'Protocol', protoText || 'Unknown');
+    const pidsOk = sup.size > 0;
+    if (!pidsOk) put('bad', 'Engine ECU', 'No reply to the supported-PIDs request. Check the ignition is on, the adapter is seated in the OBD port and no other app is using it.');
+    else put('ok', 'Engine ECU', `Answering (${sup.size} data items supported).`);
+    if (!elm.isCAN) put('warn', 'CAN', 'This car uses a pre-CAN protocol, so the CAN-only checks do not apply.');
+    else put('info', 'CAN', 'The engine ECU answers on the diagnostic bus. A quiet bus on the CAN monitor is normal on VW, Audi, Skoda and Seat cars, where the gateway blocks broadcast traffic from the OBD port.');
+
+    // 2. Crankshaft: engine speed and timing samples
+    const rpms = [], timing = [];
+    for (let i = 0; i < 8; i++) {
+      const r = await readPid(0x0C); if (r != null) rpms.push(r);
+      const t = sup.has(0x0E) ? await readPid(0x0E) : null; if (t != null) timing.push(t);
+      await new Promise(res => setTimeout(res, 600));
+    }
+    if (!rpms.length) put('bad', 'Crankshaft position', 'The ECU reports no engine speed. Either the crankshaft sensor signal is missing, or the ECU has not learned it yet. Start the engine and run the check again.');
+    else {
+      const max = Math.max(...rpms), min = Math.min(...rpms), avg = Math.round(rpms.reduce((a, b) => a + b, 0) / rpms.length);
+      if (max < 50) put('info', 'Crankshaft position', 'Engine is off, so speed reads zero. This is expected. Start the engine and run the check again to test the signal.');
+      else if (max - min > 150 && avg < 1400) put('warn', 'Crankshaft position', `Idle speed is unsteady (${min}–${max} rpm). A marginal crankshaft sensor, a damaged reluctor ring or a fault in the signal can cause this. Check the rest of the codes below too.`);
+      else put('ok', 'Crankshaft position', `Engine speed is valid and steady (average ${avg} rpm). The ECU is reading the crankshaft signal.`);
+    }
+    if (timing.length) {
+      const tAvg = (timing.reduce((a, b) => a + b, 0) / timing.length).toFixed(1);
+      put('info', 'Ignition timing', `Average timing advance ${tAvg}° as reported by the ECU. Values that jump about widely while idling can point to a timing signal problem.`);
+    }
+
+    // 3. Camshaft and position fault codes
+    const codes = [];
+    for (const [mode, resp] of [['03', '43'], ['07', '47'], ['0A', '4A']]) codes.push(...await readDTCs(mode, resp));
+    const pos = [...new Set(codes)].filter(c => POS_DTC.test(c));
+    if (!pos.length) put('ok', 'Position fault codes', 'None stored (P0335–P0344 and P0016–P0019 are clear).');
+    else put('bad', 'Position fault codes', pos.join(', ') + '. ' + pos.map(c => /^P00/.test(c) ? `${c} means the crank and cam signals don't agree (timing correlation): check the timing chain or belt.` : /^P034/.test(c) ? `${c} is a camshaft sensor fault: check the sensor, its connector and the reluctor.` : `${c} is a crankshaft sensor fault: check the sensor, its connector and the reluctor ring.`).join(' '));
+    put('info', 'Camshaft live reading', 'There is no standard OBD live value for the camshaft sensor. On VW engines the crank and cam values are in the engine ECU measuring blocks. Enter them under Extended PIDs once you have the block numbers from service information.');
+  } catch (e) {
+    put('bad', 'Check stopped', (e && e.message) || 'The adapter did not respond. Try again.');
+  } finally {
+    $('#sensorGo').disabled = false;
+    out.innerHTML = rows.join('');
+  }
+}
 /* ================= CAN MONITOR (broadcast frames) ================= */
 let canLog = [];
 async function doCanMon() {
@@ -2500,7 +2557,7 @@ $('#xImport').onchange = async e => {
   catch { toast('That file is not a valid PID list'); }
   e.target.value = '';
 };
-$('#canGo').onclick = doCanMon; $('#canCsv').onclick = canCsv;
+$('#sensorGo').onclick = doSensorCheck; $('#canGo').onclick = doCanMon; $('#canCsv').onclick = canCsv;
 $('#hRun').onclick = runHealth; $('#hExport').onclick = exportHealth;
 $('#hClear').onclick = () => { if (confirm('Delete the health history for this vehicle?')) { store.set(hKey(), '[]'); renderHealth(); } };
 document.addEventListener('click', e => {
