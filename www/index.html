@@ -389,6 +389,7 @@ html.android .rec{display:none}
       <button class="conn" id="cWifi"><svg viewBox="0 0 24 24"><path d="M2 9a15 15 0 0 1 20 0"/><path d="M5.5 12.5a10 10 0 0 1 13 0"/><path d="M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r=".8"/></svg><b>Wi-Fi adapter</b><span>Run obd-wifi-bridge.py first.</span></button>
       <button class="conn demo" id="cDemo"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></svg><b>Demo car</b><span>A simulated car with faults, to try every screen.</span></button>
     </div>
+    <div class="warnbox" id="connErr" hidden role="alert"></div>
     <div class="quick" id="quickRow" style="display:none"><button class="btn" id="cQuick">Reconnect last adapter</button><span class="small" id="quickTxt"></span></div>
     <div class="fields">
       <label class="field">Baud rate<select id="baud"><option>38400</option><option>9600</option><option>115200</option><option>230400</option><option>500000</option></select></label>
@@ -783,6 +784,7 @@ const u16 = b => b[0] * 256 + b[1];
 const pct = b => b[0] * 100 / 255;
 const trim = b => (b[0] - 128) * 100 / 128;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function showConnErr(m) { const el = $('#connErr'); if (!el) return; el.hidden = !m; el.textContent = m || ''; }
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 3200); }
 const store = { get(k, d) { try { return localStorage.getItem(k) ?? d } catch { return d } }, set(k, v) { try { localStorage.setItem(k, v) } catch {} } };
 const CFG = { units: store.get('units', 'uk') };
@@ -955,6 +957,11 @@ function fillVehicle(level) {
 
 /* ================= Transports ================= */
 const SPP_UUID = '00001101-0000-1000-8000-00805f9b34fb'; // Bluetooth Classic serial port profile
+/* Give up on a connection step that hangs (a Bluetooth COM port for an adapter that isn't there can wait for ever) */
+function withTimeout(p, ms, msg, onLate) {
+  let t; const to = new Promise((_, rej) => { t = setTimeout(() => { const e = new Error(msg); e.name = 'TimeoutError'; rej(e); }, ms); });
+  return Promise.race([p.finally(() => clearTimeout(t)), to]).catch(e => { if (e.name === 'TimeoutError' && onLate) p.then(onLate, () => {}); throw e; });
+}
 class SerialTransport {
   constructor(baud, mode) { this.baud = baud; this.mode = mode || 'usb'; }
   async pick() {
@@ -974,8 +981,13 @@ class SerialTransport {
     return navigator.serial.requestPort();
   }
   async open() {
+    setStatus('Choose the adapter in the pop-up list…');
     this.port = await this.pick();
-    await this.port.open({ baudRate: this.baud });
+    setStatus('Opening the COM port…');
+    const port = this.port;
+    await withTimeout(port.open({ baudRate: this.baud }), 15000,
+      'The COM port did not open within 15 seconds. If it belongs to a Bluetooth adapter, that adapter is switched off, out of range or no longer the one plugged in. Bluetooth LE adapters (for example KONNWEI, Vgate or Veepeak adapters that work with iPhone) connect with the Bluetooth LE button instead.',
+      () => port.close().catch(() => {}));
     store.set('lastPort', portKey(this.port)); store.set('lastConn', this.mode === 'quick' ? store.get('lastConn', 'usb') : this.mode);
     this.writer = this.port.writable.getWriter();
     this.reader = this.port.readable.getReader();
@@ -998,16 +1010,21 @@ function portKey(p) { const i = p.getInfo ? p.getInfo() : {}; return i.bluetooth
    FFF0 (Vgate, Veepeak and most ELM327 BLE clones), FFE0 (HM-10 style modules), 18F0 (newer clones and vLinker),
    E7810A71 (OBDLink CX), 49535343 (Microchip/ISSC transparent UART, many dual-mode BT 5.0 adapters),
    6E400001 (Nordic UART, some BT 5.0 adapters) */
-const BLE_OBD_SERVICES = [0xfff0, 0xffe0, 0x18f0, 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '6e400001-b5a3-f393-e0a9-e50e24dcca9e'];
+const BLE_OBD_SERVICES = [0xfff0, 0xffe0, 0x18f0, 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+  0xae30, 0xffb0, 0xffc0, 0xffd0, 0xfee0, 0xff00];   // AE30 (JieLi Bluetooth 5.x chips) and other UART services seen on budget BT 5.x adapters
 class BleTransport {
   async open() {
     const services = BLE_OBD_SERVICES;
+    setStatus('Choose the adapter in the pop-up list…');
     this.device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: services });
+    setStatus(`Connecting to ${this.device.name || 'the adapter'}…`);
     store.set('lastConn', 'ble'); store.set('lastBle', this.device.name || '');
     this.device.addEventListener('gattserverdisconnected', () => this.onLost && this.onLost());
     let server;
-    try { server = await this.device.gatt.connect(); }
-    catch { await sleep(800); server = await this.device.gatt.connect(); }   // some Bluetooth 5.0 adapters refuse the first attempt
+    const tip = 'Check the adapter is plugged in with the ignition on, no phone app is connected to it, and it is not paired in Windows Bluetooth settings (remove it there if it is), then try again.';
+    const gc = () => withTimeout(this.device.gatt.connect(), 15000, `${this.device.name || 'The adapter'} did not respond. ${tip}`, () => { try { this.device.gatt.disconnect(); } catch {} });
+    try { server = await gc(); }
+    catch (e) { if (e.name === 'TimeoutError') throw e; await sleep(800); server = await gc(); }   // some Bluetooth 5.x adapters refuse the first attempt
     let n = null, w = null, found = [];
     let list = []; try { list = await server.getPrimaryServices(); } catch {}
     // known OBD services first, in the order above, then anything else the adapter exposes
@@ -1380,11 +1397,11 @@ async function connect(kind) {
       : kind === 'wifi' ? new WifiTransport($('#wifiHost').value.trim(), $('#wifiPort').value.trim()) : new SimTransport();
     t.onData = d => elm.onData(d);
     t.onLost = () => { if (connected || connecting) { toast('Adapter connection lost'); disconnect(); } };
-    setStatus('Opening adapter…');
+    setStatus('Opening adapter…'); showConnErr('');
     try { await t.open(); }
     catch (e) {
       t = null; setStatus('Not connected');
-      if (!e || e.name !== 'NotFoundError') toast(friendlyError(e));
+      if (!e || e.name !== 'NotFoundError') { const m = friendlyError(e); toast(m); showConnErr(m); }
       else if (kind === 'btc' || kind === 'serial') { $('#btHelp').open = true; $('#btHelp').scrollIntoView({ behavior: 'smooth', block: 'center' }); toast('Adapter not in the list? Follow the Bluetooth help steps that have just opened.'); }
       return;
     }
@@ -1876,8 +1893,9 @@ async function refreshQuick() {
   const ports = await navigator.serial.getPorts().catch(() => []);
   if (!ports.length) return;
   const kind = store.get('lastConn', 'usb');
+  if (kind === 'ble') return;   // Bluetooth LE adapters always connect with the Bluetooth LE button
   $('#quickRow').style.display = '';
-  $('#quickTxt').textContent = 'Last used: ' + (kind === 'bt' ? 'Bluetooth Classic' : 'USB') + ' adapter, no picker needed';
+  $('#quickTxt').textContent = 'Last used: ' + (kind === 'bt' ? 'Bluetooth Classic adapter' : 'USB or COM-port adapter') + ', no picker needed. For a different adapter, use the buttons above.';
 }
 refreshQuick();
 $('#cWifi').onclick = () => connect('wifi');
