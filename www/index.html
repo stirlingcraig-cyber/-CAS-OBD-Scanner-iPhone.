@@ -758,6 +758,24 @@ html.android .rec{display:none}
 </section>
 
 <!-- TERMINAL -->
+<section id="v-paywall">
+  <div class="card">
+    <h2>CAS OBD Scanner Pro</h2>
+    <p id="proWhat" class="small" style="margin:0 0 8px"></p>
+    <p class="small muted" style="margin-top:0">Pro unlocks the advanced tools. Connecting, live data, trouble codes, freeze frame and demo mode stay free.</p>
+    <ul class="small" style="line-height:1.7">
+      <li>All systems scan (every control module)</li>
+      <li>Active tests and output control</li>
+      <li>Extended PIDs and CAN monitor</li>
+      <li>Health trends</li>
+      <li>Service centre and tyre check</li>
+      <li>Particulate filter tools</li>
+      <li>Terminal</li>
+    </ul>
+    <div class="row"><button class="btn" id="proBuy">Unlock Pro for <span id="proPrice">£13.99</span></button><button class="btn ghost" id="proRestore">Restore purchase</button></div>
+    <p class="small muted" style="margin-top:12px">One-off payment charged to your Apple ID. No subscription. If you already bought it, Restore purchase brings it back on this iPhone.</p>
+  </div>
+</section>
 <section id="v-term">
   <div class="card">
     <div class="row"><input type="text" id="termIn" placeholder="Type a command, e.g. ATRV or 0105" style="flex:1;min-width:160px" spellcheck="false" autocomplete="off"><button class="btn" id="termSend">Send</button></div>
@@ -1521,10 +1539,19 @@ async function keepAwake(on) {
 document.addEventListener('visibilitychange', () => { if (connected && document.visibilityState === 'visible') keepAwake(true); });
 
 /* ================= Navigation & polling loop ================= */
-const TITLES = { home: 'CAS OBD Scanner', dash: 'Dashboard', live: 'Live graphs', all: 'All sensors', dtc: 'Trouble codes', freeze: 'Freeze frame', mon: 'Monitors', info: 'ECU info', log: 'Data log', term: 'Terminal' };
+const TITLES = { paywall: 'Pro version', home: 'CAS OBD Scanner', dash: 'Dashboard', live: 'Live graphs', all: 'All sensors', dtc: 'Trouble codes', freeze: 'Freeze frame', mon: 'Monitors', info: 'ECU info', log: 'Data log', term: 'Terminal' };
 const EXTRA_ENTER = {}, BACK_TO = {};
 let view = 'home', loopToken = 0;
+/* Pro gate: on the iPhone app these screens need the one-off Pro purchase (set up at the end of this file).
+   The Windows and Android versions keep PRO = true and show everything. */
+var PRO = true;
+const PRO_VIEWS = new Set(['modules', 'tests', 'ext', 'can', 'health', 'svc', 'tyre', 'dpf', 'term']);
+let proWant = null;
 function show(v) {
+  if (!PRO && PRO_VIEWS.has(v)) {
+    proWant = v; $('#proWhat').textContent = (TITLES[v] || 'This screen') + ' is a Pro feature.';
+    v = 'paywall';
+  }
   loopToken++;
   if (view === 'term' && v !== 'term' && termDirty && elm.t) { termDirty = false; baseline(); } // undo raw AT changes made in the terminal
   view = v;
@@ -4185,6 +4212,26 @@ if (NBLE) {
   };
 }
 
+/* ---- Pro purchase: iPhone app only (StoreKit through the CASPurchase plugin) ---- */
+const NPUR = IS_NATIVE && CAP.Plugins ? CAP.Plugins.CASPurchase : null;
+if (NPUR) {
+  PRO = false;
+  const unlock = () => { PRO = true; toast('Pro unlocked. Thank you!'); show(proWant || 'home'); };
+  NPUR.status().then(r => {
+    if (r.price) $('#proPrice').textContent = r.price;
+    if (r.pro) { PRO = true; }
+  }).catch(() => {});
+  $('#proBuy').onclick = async () => {
+    const b = $('#proBuy'); b.disabled = true;
+    try { const r = await NPUR.purchase(); if (r.pro) unlock(); else if (r.message) toast(r.message); }
+    catch (e) { toast((e && e.message) || 'The purchase could not be completed.'); }
+    finally { b.disabled = false; }
+  };
+  $('#proRestore').onclick = async () => {
+    try { const r = await NPUR.restore(); if (r.pro) unlock(); else toast('No Pro purchase was found for this Apple ID.'); }
+    catch (e) { toast((e && e.message) || 'Restore failed. Try again.'); }
+  };
+}
 if (IS_IOS || IS_NATIVE) {
   document.documentElement.classList.add('ios');
   const setBtn = (id, on, why) => { const b = $('#' + id); if (!b) return; b.dataset.unsupported = on ? '0' : '1'; b.disabled = !on; if (why) { const s = b.querySelector('span'); if (s) s.textContent = why; } };

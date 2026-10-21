@@ -1,0 +1,14 @@
+{
+  "name": "cas-purchase",
+  "version": "1.0.0",
+  "private": true,
+  "description": "StoreKit 2 one-off purchase for CAS OBD Scanner Pro (local Capacitor plugin)",
+  "main": "index.js",
+  "license": "UNLICENSED",
+  "capacitor": {
+    "ios": { "src": "ios" }
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=8.0.0"
+  }
+}
