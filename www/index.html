@@ -4078,7 +4078,8 @@ const uuid16 = n => `0000${n.toString(16).padStart(4, '0')}-0000-1000-8000-00805
 /* OBD adapter serial services: FFF0 (Vgate, Veepeak and most ELM327 BLE clones), FFE0 (HM-10 based),
    18F0 (some newer clones), and the Microchip transparent-UART service used by OBDLink CX / MX+ */
 const OBD_BLE = BLE_OBD_SERVICES.map(u => typeof u === 'number' ? uuid16(u) : u);
-const hexOf = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join(' ');
+// the native plugin needs plain hex with no spaces ("41545a0d"); anything else makes it crash
+const hexOf = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 const bytesOfHex = h => { const s = String(h || '').replace(/[^0-9a-f]/gi, ''), o = new Uint8Array(s.length >> 1); for (let i = 0; i < o.length; i++) o[i] = parseInt(s.substr(i * 2, 2), 16); return o; };
 
 if (NBLE) {
