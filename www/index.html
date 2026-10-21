@@ -1011,7 +1011,7 @@ function portKey(p) { const i = p.getInfo ? p.getInfo() : {}; return i.bluetooth
    E7810A71 (OBDLink CX), 49535343 (Microchip/ISSC transparent UART, many dual-mode BT 5.0 adapters),
    6E400001 (Nordic UART, some BT 5.0 adapters) */
 const BLE_OBD_SERVICES = [0xfff0, 0xffe0, 0x18f0, 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
-  0xae30, 0xffb0, 0xffc0, 0xffd0, 0xfee0, 0xff00];   // AE30 (JieLi Bluetooth 5.x chips) and other UART services seen on budget BT 5.x adapters
+  0xae00, 0xae30, 0xabf0, 0xffa0, 0xffb0, 0xffc0, 0xffd0, 0xfee0, 0xff00, 0xff10, 0xfe60, 0x1234];   // AE00/AE30 (JieLi Bluetooth 5.x chips), ABF0 (Beken) and other UART services seen on budget BT 5.x adapters
 class BleTransport {
   async open() {
     const services = BLE_OBD_SERVICES;
@@ -1038,7 +1038,12 @@ class BleTransport {
       const nn = chars.find(c => c.properties.notify || c.properties.indicate), ww = chars.find(c => c.properties.write || c.properties.writeWithoutResponse);
       if (nn && ww) { n = nn; w = ww; break; }
     }
-    if (!n || !w) { try { this.device.gatt.disconnect(); } catch {} throw new Error(`That Bluetooth device has no OBD serial service${found.length ? ` (it offers ${found.map(u => u.slice(4, 8).toUpperCase()).join(', ')})` : ''}. Choose the OBD adapter itself, and if it still fails, send this message to support.`); }
+    if (!n || !w) {
+      try { this.device.gatt.disconnect(); } catch {}
+      throw new Error(found.length
+        ? `${this.device.name || 'That Bluetooth device'} has no OBD serial service (it offers ${found.map(u => u.slice(4, 8).toUpperCase()).join(', ')}). Send this message to support.`
+        : `${this.device.name || 'That Bluetooth device'} uses a Bluetooth service this scanner doesn't know yet. If Windows shows it as "Paired", remove it in Windows Bluetooth settings and try again. If it still fails, open chrome://bluetooth-internals in Chrome (or edge://bluetooth-internals in Edge), press Start scan, click Inspect next to the adapter and send a picture of the list of services to support.`);
+    }
     this.w = w;
     const dec = new TextDecoder();
     n.addEventListener('characteristicvaluechanged', e => this.onData(dec.decode(e.target.value)));
