@@ -558,6 +558,20 @@ html.android .rec{display:none}
     <div class="row"><button class="btn" id="actSend">Send command</button><button class="btn ghost" id="actReturn">Return control to ECU</button></div>
     <div id="actOut" class="small" style="margin-top:10px"></div>
   </div>
+  <div class="card">
+    <h2>Wastegate actuator test (turbo boost)</h2>
+    <p class="small muted" style="margin-top:-4px">Commands the wastegate open, then closed, while the engine holds a steady 2,000–3,000 rpm, and watches the boost pressure respond. Fiesta ST (1.5 EcoBoost) and most turbo petrol engines: the identifiers and command bytes for the wastegate actuator come from the service information for your engine. Engine ECU only (7E0).</p>
+    <div class="row small" style="margin-bottom:8px">
+      <label>Identifier (hex) <input type="text" id="wgId" placeholder="e.g. 0A12" style="width:110px"></label>
+    </div>
+    <div class="row small" style="margin-bottom:8px">
+      <label>Open command (hex) <input type="text" id="wgOpen" placeholder="2F data, e.g. 03 00" style="width:150px"></label>
+      <label>Closed command (hex) <input type="text" id="wgClosed" placeholder="2F data, e.g. 03 FF" style="width:150px"></label>
+    </div>
+    <label class="small row" style="margin-bottom:10px"><input type="checkbox" id="wgAck"> The car is stationary in neutral with the handbrake on, I can hold the engine steady at 2,000–3,000 rpm, and I have the identifiers from the service information.</label>
+    <div class="row"><button class="btn" id="wgRun">Run wastegate test</button></div>
+    <div id="wgOut" class="small" style="margin-top:10px"></div>
+  </div>
 </section>
 
 <!-- EXTENDED PIDS -->
@@ -2222,6 +2236,7 @@ const KB = [
       return { F, fx: ['Test the battery (load test)', 'Check the alternator output and belt', 'Clean and tighten the battery terminals and engine earth straps'], tests: ['Engine off: 12.4–12.7 V (charged). Running: 13.5–14.7 V.'] };
     } },
   { re: /^(P008[78]|P019[0-4])$/, t: 'Fuel pressure', pids: [0x0A, 0x22, 0x23, 0x59, 0x0C, 0x04], a: () => ({ F: [['warn', 'Compare the rail pressure reading at idle and under load in Live data. Low pressure under load points to the pump or filter.']], fx: ['Replace the fuel filter (especially diesels)', 'Check the lift/low-pressure pump', 'Check the pressure regulator/metering valve', 'Check the rail pressure sensor and wiring'], tests: [] }) },
+  { re: /^P024[3-6]$/, t: 'Wastegate actuator / boost control solenoid', pids: [0x0B, 0x33, 0x0C], a: () => ({ F: [['warn', 'The wastegate solenoid or actuator circuit reports a fault. Boost control is lost, so the car runs low boost and may go into limp mode.']], fx: ['Check the actuator or solenoid connector and wiring', 'Run the Wastegate actuator test (Active tests)', 'Check the boost hoses and vacuum lines for splits', 'Replace the wastegate actuator or solenoid if the test fails'], tests: ['Use the Wastegate actuator test to check the open and closed response.'] }) },
   { re: /^P0(234|299)$/, t: 'Turbo boost', pids: [0x0B, 0x33, 0x0C, 0x04], a: c => { const m = S(c, 0x0B), b = S(c, 0x33); return { F: m && b ? [['ok', `Maximum boost in the sample: ${fmt(m.max - b.avg)} kPa above atmosphere. Test under load to judge.`]] : [], fx: ['Check the intercooler hoses for splits (boost leaks)', 'Check the wastegate/VNT actuator and vacuum lines', 'Check the boost pressure sensor', 'Inspect the turbo for shaft play'], tests: [] }; } },
   { re: /^P2(002|45[2-9]|46[0-3]|44[0-9A-F])$/, t: 'Diesel particulate filter', pids: [0x0D, 0x0C, 0x3C, 0x05], a: () => ({ F: [['warn', 'DPF faults usually come from short journeys that prevent regeneration.']], fx: ['Drive for 20+ minutes at motorway speed to let it regenerate', 'Check the DPF differential pressure sensor hoses', 'Forced regeneration with a manufacturer-level tool', 'Professional DPF clean or replacement'], tests: [] }) },
   { re: /^P0[7-9]/, t: 'Transmission', pids: [0x0D, 0x0C, 0x05], a: () => ({ F: [['warn', 'The engine ECU is reporting a gearbox fault. The gearbox module holds the detailed codes, so use All systems scan.']], fx: ['Run an All systems scan and read the TCM codes', 'Check the gearbox oil level and condition', 'Check the gearbox connectors'], tests: [] }) },
@@ -2350,6 +2365,61 @@ async function actSend(returnCtl) {
   }));
   if (!out) return;
   $('#actOut').innerHTML = out.map(o => `<div class="find ${o[0]}">${esc((returnCtl ? 'Return control: ' : `${req.match(/../g).join(' ')} → `) + o[1])}</div>`).join('');
+}
+
+/* ================= WASTEGATE ACTUATOR TEST ================= */
+async function wgCommand(req) {
+  const r = await exclusive('Wastegate test', () => withHeaders(async () => {
+    await xs('ATST64');
+    const s = await udsTx('7E0', '1003', 2000);
+    if (!s || !s.m.startsWith('50')) return ['warn', 'The engine ECU did not enter extended session: ' + describeResp('10', s && s.m)[1]];
+    const x = await udsTx('7E0', req, 5000);
+    return describeResp(req, x && x.m);
+  }));
+  return r || ['bad', 'The command could not be sent.'];
+}
+async function doWastegate() {
+  if (!connected) return toast('Connect first');
+  const out = $('#wgOut'), id = $('#wgId').value.replace(/\s/g, '').toUpperCase();
+  const open = $('#wgOpen').value.replace(/\s/g, '').toUpperCase(), closed = $('#wgClosed').value.replace(/\s/g, '').toUpperCase();
+  if (!$('#wgAck').checked) return toast('Tick the safety confirmation first.');
+  if (!/^[0-9A-F]{4}$/.test(id)) return toast('Identifier must be 4 hex digits, e.g. 0A12');
+  if (!/^([0-9A-F]{2})+$/.test(open) || !/^([0-9A-F]{2})+$/.test(closed)) return toast('Open and closed commands must be hex bytes');
+  if (!(await stationary())) return toast('The vehicle must be stationary.');
+  const rpm = await readPid(0x0C);
+  if (rpm == null || rpm < 1800 || rpm > 3200) return toast('Start the engine and hold it at 2,000–3,000 rpm, then run the test again.');
+  if (!confirm('The wastegate will be commanded open, then closed, for about 4 seconds each. Keep the engine steady at 2,000–3,000 rpm. Control returns to the ECU at the end. Continue?')) return;
+  const baro = (await readPid(0x33)) ?? 101;
+  const note = t => { out.innerHTML = t; };
+  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const boost = [];
+  const sample = async arr => { for (let i = 0; i < 4; i++) { const m = await readPid(0x0B); if (m != null) arr.push(Math.round(m - baro)); await sleep(900); } };
+  const pts = { before: [], open: [], closed: [] };
+  note('<span class="muted">Reading boost with the wastegate under the ECU\'s control…</span>');
+  await sample(pts.before);
+  note('<span class="muted">Wastegate commanded open…</span>');
+  const rOpen = await wgCommand('2F' + id + open);
+  await sample(pts.open);
+  note('<span class="muted">Wastegate commanded closed…</span>');
+  const rClosed = await wgCommand('2F' + id + closed);
+  await sample(pts.closed);
+  const rBack = await wgCommand('2F' + id + '00');
+  const rows = [['Open command', rOpen], ['Closed command', rClosed], ['Return to ECU', rBack]]
+    .map(([l, r]) => `<div class="find ${r[0]}">${esc(l)}: ${esc(r[1])}</div>`).join('');
+  if (rOpen[0] !== 'ok' || rClosed[0] !== 'ok') {
+    note(rows + '<div class="warnbox" style="margin-top:8px">The ECU did not accept the command. Check the identifier and command bytes against the service information, and that the engine is running at 2,000–3,000 rpm.</div>');
+    return;
+  }
+  const bo = avg(pts.before), bc = avg(pts.open), bcl = avg(pts.closed);
+  const delta = bcl != null && bc != null ? bcl - bc : null;
+  const f = v => v == null ? '–' : Math.round(v) + ' kPa';
+  let verdict;
+  if (delta == null) verdict = ['warn', 'No boost readings: the ECU isn\'t reporting intake pressure (PID 0B), so the test is inconclusive.'];
+  else if (delta >= 15) verdict = ['ok', `Closing the wastegate raised boost by about ${Math.round(delta)} kPa. The actuator is moving and boost responds.`];
+  else if (delta >= 5) verdict = ['warn', `Small response (about ${Math.round(delta)} kPa). The actuator may be sticking, or the test rpm was too low. Re-test with the car warm at a steady 2,500 rpm, and check the actuator linkage and hoses.`];
+  else verdict = ['bad', `No measurable boost change (about ${Math.round(delta)} kPa). The actuator may not be moving, or there is a boost leak. Check the actuator electrical connector, its hoses and the intercooler pipes, then compare with the service information.`];
+  note(rows + `<div class="find ${verdict[0]}" style="margin-top:8px">${esc(verdict[1])}</div>` +
+    `<p class="small muted" style="margin-top:8px">Boost (above atmospheric): before ${f(bo)}, wastegate open ${f(bc)}, wastegate closed ${f(bcl)}.</p>`);
 }
 
 /* ================= EXTENDED PIDS (MODE 22) ================= */
@@ -2584,7 +2654,7 @@ $('#xImport').onchange = async e => {
   catch { toast('That file is not a valid PID list'); }
   e.target.value = '';
 };
-$('#sensorGo').onclick = doSensorCheck; $('#canGo').onclick = doCanMon; $('#canCsv').onclick = canCsv;
+$('#sensorGo').onclick = doSensorCheck; $('#wgRun').onclick = doWastegate; $('#canGo').onclick = doCanMon; $('#canCsv').onclick = canCsv;
 $('#hRun').onclick = runHealth; $('#hExport').onclick = exportHealth;
 $('#hClear').onclick = () => { if (confirm('Delete the health history for this vehicle?')) { store.set(hKey(), '[]'); renderHealth(); } };
 document.addEventListener('click', e => {
