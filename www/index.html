@@ -455,6 +455,7 @@ html.android .rec{display:none}
       <button class="tile" data-go="health"><span class="ti"><svg viewBox="0 0 48 48"><path d="M6 38l10-12 8 6 12-16 6 5"/><path d="M35 15h7v7"/></svg></span><b>Health trends</b><small>Spot slow wear before a warning light comes on</small></button>
     </div></div>
     <div class="group"><h3>Service and maintenance <span>Keep the car in good order (works without connecting)</span></h3><div class="grid">
+      <button class="tile" data-go="pdm"><span class="ti"><svg viewBox="0 0 48 48"><path d="M6 36h36M10 30l8-8 6 5 10-12 6 6"/><circle cx="34" cy="13" r="3"/></svg></span><b>Predictive maintenance</b><small>Forecast what needs attention next</small></button>
       <button class="tile" data-go="svc"><span class="badge" id="badgeSvc" hidden></span><span class="ti"><svg viewBox="0 0 48 48"><path d="M30 6a10 10 0 0 0-9 14L7 34a4 4 0 0 0 6 6l14-14a10 10 0 0 0 14-9l-6 5-6-2-2-6z"/></svg></span><b>Service</b><small>Oil change and service schedule, history and service-light reset</small></button>
       <button class="tile" data-go="tyre"><span class="ti"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="17"/><circle cx="24" cy="24" r="7"/><path d="M24 7v4M24 37v4M7 24h4M37 24h4M12 12l3 3M33 33l3 3M36 12l-3 3M15 33l-3 3"/></svg></span><b>Tyres</b><small>Pressure, tread and age check, slow-puncture watch and TPMS reset</small></button>
       <button class="tile" data-go="dpf"><span class="ti"><svg viewBox="0 0 48 48"><rect x="12" y="14" width="24" height="20" rx="3"/><path d="M4 24h8M36 24h8M18 14v20M24 14v20M30 14v20"/><path d="M40 16c2 2 2 4 0 6M43 13c3 4 3 8 0 12"/></svg></span><b>Particulate filter</b><small>DPF/GPF readings, regeneration drive and workshop regeneration</small></button>
@@ -618,6 +619,16 @@ html.android .rec{display:none}
   </div>
   <div id="hAlerts"></div>
   <div id="hOut"></div>
+</section>
+
+<!-- PREDICTIVE MAINTENANCE -->
+<section id="v-pdm">
+  <div class="card">
+    <h2>Predictive maintenance</h2>
+    <p class="small muted" style="margin-top:-4px">Looks ahead at what your car's own data suggests: how fast charging voltage and fuel trims are drifting (from your health checks), which service items are coming due, and any fault codes read in this session. It runs on this device, so trends need at least 4 health checks. It isn't a manufacturer forecast and can't see parts, prices or fleet data, so treat it as a plan to check, not a guarantee.</p>
+    <div class="row"><button class="btn" id="pdmRefresh">Refresh forecast</button><button class="btn ghost" id="pdmReport">Download report</button></div>
+  </div>
+  <div id="pdmOut"></div>
 </section>
 
 <!-- SERVICE -->
@@ -1559,7 +1570,7 @@ let view = 'home', loopToken = 0;
 /* Pro gate: on the iPhone app these screens need the one-off Pro purchase (set up at the end of this file).
    The Windows and Android versions keep PRO = true and show everything. */
 var PRO = true;
-const PRO_VIEWS = new Set(['modules', 'tests', 'ext', 'can', 'health', 'svc', 'tyre', 'dpf', 'term']);
+const PRO_VIEWS = new Set(['modules', 'tests', 'ext', 'can', 'health', 'pdm', 'svc', 'tyre', 'dpf', 'term']);
 let proWant = null;
 function show(v) {
   if (!PRO && PRO_VIEWS.has(v)) {
@@ -1959,7 +1970,7 @@ $('#disconnect').onclick = disconnect;
 $('#backBtn').onclick = () => show(BACK_TO[view] || 'home');
 $('#tiles').onclick = e => {
   const t = e.target.closest('.tile'); if (!t) return;
-  if (!connected && !['log', 'term', 'health', 'checks', 'svc', 'tyre'].includes(t.dataset.go)) return toast('Connect to an adapter (or try Demo mode) first');
+  if (!connected && !['log', 'term', 'health', 'checks', 'svc', 'tyre', 'pdm'].includes(t.dataset.go)) return toast('Connect to an adapter (or try Demo mode) first');
   show(t.dataset.go);
   if (t.dataset.go === 'term') { const o = $('#termOut'); o.textContent = termLines.join('\n'); o.scrollTop = o.scrollHeight; }
 };
@@ -2557,6 +2568,59 @@ function canCsv() {
   a.download = 'can-capture.csv'; a.click();
 }
 
+/* ================= PREDICTIVE MAINTENANCE (on this device) ================= */
+function pdmItems() {
+  const items = [], h = hLoad();
+  const runRecs = h.filter(r => r.rpm > 500 && r.vRun != null).slice(-12);
+  if (runRecs.length >= 4) {
+    const vNow = runRecs[runRecs.length - 1].vRun, sv = slope(runRecs.map(r => r.vRun));
+    if (sv < -0.02 && vNow > 13.2) {
+      const n = Math.ceil((vNow - 13.2) / -sv);
+      items.push({ r: n <= 3 ? 'bad' : n <= 8 ? 'warn' : 'ok', t: 'Charging voltage (alternator and battery)',
+        d: `Running voltage is falling about ${fmt(-sv)} V per check. At this rate it reaches the 13.2 V warning level in about ${n} more check${n === 1 ? '' : 's'}.`,
+        a: n <= 3 ? 'Test the charging system and battery soon.' : 'Keep running health checks, and test the battery before winter.' });
+    }
+  }
+  const lt = h.filter(r => r.ltft != null).slice(-12);
+  if (lt.length >= 4) {
+    const st = slope(lt.map(r => r.ltft)), cur = lt[lt.length - 1].ltft;
+    let n = null, dir = '';
+    if (st > 0.2 && cur < 10) { n = Math.ceil((10 - cur) / st); dir = 'lean'; }
+    else if (st < -0.2 && cur > -10) { n = Math.ceil((cur + 10) / -st); dir = 'rich'; }
+    if (n != null) items.push({ r: n <= 3 ? 'bad' : n <= 8 ? 'warn' : 'ok', t: 'Fuel trim (air leaks, fuel delivery)',
+      d: `Long-term fuel trim is drifting ${dir} (now ${fmt(cur)}%). It reaches the ±10% warning level in about ${n} more check${n === 1 ? '' : 's'}.`,
+      a: 'Check the intake hoses and the air filter for leaks, then recheck. A weak fuel pump or dirty injectors can cause the same drift.' });
+  }
+  svLoad();
+  SVC_ITEMS.forEach(([id, name]) => {
+    const st = itemStatus(id);
+    if (st.s === 'bad' || st.s === 'warn') items.push({ r: st.s, t: name, d: st.txt, a: 'Book this service item, and record it on the Service screen once it is done.' });
+  });
+  if (lastDtcs) {
+    const codes = [...new Set([...lastDtcs.res['03'], ...lastDtcs.res['07'], ...lastDtcs.res['0A']])];
+    if (codes.length) items.push({ r: 'bad', t: 'Stored fault codes', d: codes.join(', '), a: 'Open Trouble codes for the freeze frame and the fault analysis.' });
+  }
+  const order = { bad: 0, warn: 1, ok: 2, na: 3 };
+  items.sort((a, b) => order[a.r] - order[b.r]);
+  return { items, n: h.length };
+}
+function renderPdm() {
+  const { items, n } = pdmItems();
+  const basis = `Based on ${n} health check${n === 1 ? '' : 's'}, your service records and the fault codes read in this session.`;
+  $('#pdmOut').innerHTML = `<div class="card"><h2>Forecast and plan</h2><p class="small muted" style="margin-top:-4px">${esc(basis)}</p>` +
+    (items.length ? items.map(i => `<div class="find ${i.r}" style="margin:8px 0"><b>${esc(i.t)}</b><br>${esc(i.d)}<br><span class="muted small">${esc(i.a)}</span></div>`).join('')
+      : '<div class="find ok">Nothing needs attention yet. Forecasts appear once there are at least 4 health checks, and the service plan has records.</div>') + '</div>';
+}
+function pdmReport() {
+  const { items, n } = pdmItems(), km = currentKm().km;
+  const tag = { bad: 'HIGH', warn: 'MEDIUM', ok: 'LOW', na: 'INFO' };
+  const lines = ['CAS OBD Scanner - maintenance report', 'Date: ' + new Date().toLocaleString('en-GB'), 'VIN: ' + (vin || 'unknown'), 'Odometer: ' + (km != null ? Math.round(km) + ' km' : 'not recorded'),
+    `Basis: ${n} health check(s), service records and fault codes read in this session`, '', ...(items.length ? items.map(i => `[${tag[i.r] || 'INFO'}] ${i.t}\n    ${i.d}\n    Action: ${i.a}`) : ['No items need attention.']),
+    '', 'These are trend estimates from the car\'s own data. They are not a manufacturer forecast, and they do not replace a workshop inspection.'];
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain' }));
+  a.download = 'maintenance-report.txt'; a.click();
+}
+
 /* ================= PREDICTIVE HEALTH TRENDS ================= */
 const hKey = () => 'health:' + (vin || 'unknown');
 const hLoad = () => { try { return JSON.parse(store.get(hKey(), '[]')) || []; } catch { return []; } };
@@ -2608,6 +2672,7 @@ function renderHealth() {
   });
 }
 EXTRA_ENTER.health = renderHealth;
+EXTRA_ENTER.pdm = renderPdm;
 function resetProState() {
   modules = []; for (const k in trimMem) delete trimMem[k];
   $('#modOut').innerHTML = ''; $('#modStatus').textContent = ''; $('#modClearAll').style.display = 'none';
@@ -2656,6 +2721,7 @@ $('#xImport').onchange = async e => {
 };
 $('#sensorGo').onclick = doSensorCheck; $('#wgRun').onclick = doWastegate; $('#canGo').onclick = doCanMon; $('#canCsv').onclick = canCsv;
 $('#hRun').onclick = runHealth; $('#hExport').onclick = exportHealth;
+$('#pdmRefresh').onclick = renderPdm; $('#pdmReport').onclick = pdmReport;
 $('#hClear').onclick = () => { if (confirm('Delete the health history for this vehicle?')) { store.set(hKey(), '[]'); renderHealth(); } };
 document.addEventListener('click', e => {
   const a = e.target.closest('[data-analyse]'); if (a) { if (!connected) return toast('Connect first'); return openDiag(a.dataset.analyse, view); }
@@ -3404,7 +3470,7 @@ $('#disconnect').onclick = () => disconnect();
    Everything is stored per car (VIN) on this device. Distances are kept
    in km internally and shown in miles or km to match the Units setting.
    ===================================================================== */
-Object.assign(TITLES, { svc: 'Service', tyre: 'Tyres' });
+Object.assign(TITLES, { svc: 'Service', tyre: 'Tyres', pdm: 'Predictive maintenance' });
 const KM = 1.609344;
 const uk = () => CFG.units !== 'metric';
 const distTxt = km => km == null ? '–' : uk() ? `${Math.round(km / KM).toLocaleString()} miles` : `${Math.round(km).toLocaleString()} km`;
