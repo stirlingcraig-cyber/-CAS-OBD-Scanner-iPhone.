@@ -4351,7 +4351,8 @@ if (NBLE) {
 /* ---- Pro purchase: iPhone app only (StoreKit through the CASPurchase plugin) ---- */
 const NPUR = IS_NATIVE && CAP.Plugins ? CAP.Plugins.CASPurchase : null;
 if (NPUR) {
-  PRO = false;
+  // Store builds start locked until the Pro purchase is confirmed. The personal build sets CAS_PERSONAL_BUILD (see the personal workflow).
+  PRO = !!window.CAS_PERSONAL_BUILD;
   const unlock = () => { PRO = true; toast('Pro unlocked. Thank you!'); show(proWant || 'home'); };
   NPUR.status().then(r => {
     if (r.price) $('#proPrice').textContent = r.price;

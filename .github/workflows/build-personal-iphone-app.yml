@@ -1,0 +1,82 @@
+# Builds a PERSONAL copy of the CAS OBD Scanner iPhone app with Pro unlocked for your own phone.
+# Do NOT submit this build to App Store Connect: the store build keeps the paid Pro purchase.
+# Run it from the Actions tab (Build personal iPhone app > Run workflow). The result is an
+# unsigned .ipa on the Releases page, installed with Sideloadly or AltStore as before.
+name: Build personal iPhone app (Pro unlocked)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write          # needed to publish the release
+
+jobs:
+  build:
+    runs-on: xcode-27          # Apple Silicon runner with Xcode 27. If this label isn't available to you, use macos-latest.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Capacitor and the Bluetooth plugin
+        run: npm ci
+
+      - name: Unlock Pro for this personal build
+        run: |
+          set -e
+          test -f www/index.html || { echo "www/index.html missing"; exit 1; }
+          sed -i 's#</head>#<script>window.CAS_PERSONAL_BUILD = true;</script></head>#' www/index.html
+          grep -q CAS_PERSONAL_BUILD www/index.html
+
+      - name: Copy the scanner into the iOS project
+        run: npx cap sync ios
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build the app (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            archive | tail -n 80
+
+      - name: Package as .ipa
+        run: |
+          set -e
+          APP="$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app"
+          test -d "$APP" || { echo "App.app was not produced"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "CAS-OBD-Scanner-iPhone-Personal.ipa" Payload
+          ls -la "CAS-OBD-Scanner-iPhone-Personal.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CAS-OBD-Scanner-iPhone
+          path: ${{ runner.temp }}/ipa/CAS-OBD-Scanner-iPhone-Personal.ipa
+          retention-days: 30
+
+      # Also publish it as a release, so the newest build is always at
+      # https://github.com/<you>/<repo>/the newest personal-N release, CAS-OBD-Scanner-iPhone-Personal.ipa
+      - name: Publish as a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="personal-${{ github.run_number }}"
+          gh release create "$TAG" "$RUNNER_TEMP/ipa/CAS-OBD-Scanner-iPhone-Personal.ipa" \
+            --repo "${{ github.repository }}" \
+            --title "CAS OBD Scanner for iPhone, personal Pro build (${{ github.run_number }})" \
+            --notes "Personal build with Pro unlocked. Not for the App Store. Built from ${{ github.sha }}." \
