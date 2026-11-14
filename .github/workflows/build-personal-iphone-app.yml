@@ -29,7 +29,7 @@ jobs:
         run: |
           set -e
           test -f www/index.html || { echo "www/index.html missing"; exit 1; }
-          sed -i 's#</head>#<script>window.CAS_PERSONAL_BUILD = true;</script></head>#' www/index.html
+          perl -0pi -e 's#</head>#<script>window.CAS_PERSONAL_BUILD = true;</script></head>#' www/index.html
           grep -q CAS_PERSONAL_BUILD www/index.html
 
       - name: Copy the scanner into the iOS project
